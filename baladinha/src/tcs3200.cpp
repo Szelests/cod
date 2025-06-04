@@ -1,4 +1,4 @@
-#include "tcs3200.h"
+#include "tcs3200.hpp"
 
 TCS3200::TCS3200(uint8_t S0, uint8_t S1, uint8_t S2, uint8_t S3, uint8_t OUT)
 : _S0(S0), _S1(S1), _S2(S2), _S3(S3), _OUT(OUT) {}

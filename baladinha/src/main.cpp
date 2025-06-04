@@ -1,13 +1,15 @@
 #include <Arduino.h>
-#include "tcs3200.h"
-#include "serial_com.h"
+#include "tcs3200.hpp"
+#include "serial_com.hpp"
 
 // Define the IOs
-#define S0 4
-#define S1 5
-#define S2 6
-#define S3 7
-#define OUT 8
+#define S0 4  // AZUL ESCURO
+#define S1 5  // LARANJA
+#define S2 6  // BRANCO
+#define S3 7  // VERDE CLARO
+#define OUT 8 // VERDE ESCURO
+              // AZUL CLARO - VCC 5V
+              // MARROM CLARO - GND
 
 // Module instances
 TCS3200 colorSensor(S0, S1, S2, S3, OUT);
