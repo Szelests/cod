@@ -3,6 +3,7 @@
 #include "TCS3200Sensor.hpp"
 #include "PWMSpeaker.hpp"
 #include "ButtonManager.hpp"
+#include "SoundStack.hpp"
 
 // --- Configuração dos Pinos do Sensor --
 //MARROM CLARO - GND
@@ -29,12 +30,20 @@
 #define PIN_BTN_VOL_DOWN A0
 #define PIN_BTN_CAPTURE 2
 
-#define SOUND_STACK_SIZE 8 // Tamanho da pilha LIFO para notas de som
-
 // Instâncias das classes
 TCS3200Sensor meuSensor(PIN_S0, PIN_S1, PIN_S2, PIN_S3, PIN_OUT_SENSOR);
 PWMSpeaker meuAltoFalante(PIN_SPEAKER);
 ButtonManager meuGerenciadorDeBotoes;
+SoundStack minhaPilhaDeSons; 
+ButtonManager* globalButtonManager = nullptr;
+
+enum class ProgramState { NORMAL_OPERATION, WAITING_FOR_WHITE_CAL, WAITING_FOR_BLACK_CAL };
+ProgramState currentState = ProgramState::NORMAL_OPERATION;
+
+// --- Variáveis para detectar o combo de botões ---
+unsigned long comboPressStartTime = 0;
+bool comboInProgress = false;
+const unsigned long COMBO_HOLD_DURATION = 1500; // Segurar por 1.5 segundos
 
 // Variáveis de cor
 int r_atual, g_atual, b_atual;
@@ -71,16 +80,45 @@ const uint16_t pianoNotes[] = {
 };
 const uint8_t numPianoNotes = sizeof(pianoNotes) / sizeof(pianoNotes[0]);
 
-// Pilha LIFO para as notas
-uint16_t soundStack[SOUND_STACK_SIZE] = {0}; // Inicializa com 0s (silêncio)
-uint8_t soundStackCount = 0; // Número de notas válidas na pilha
+
 
 // Volume (conceitual)
 uint8_t volumeLevel = 5; // 0-10
 unsigned long defaultSoundDuration = 300; // Duração padrão do som em ms
 
 // ----- Funções Auxiliares -----
-// Função para converter RGB para Hue
+// --- Rotina de Serviço de Interrupção (ISR) ---
+// Esta é a função que o hardware chama quando o pino 2 muda de HIGH para LOW.
+void captureButtonISR() {
+  if (globalButtonManager != nullptr) {
+    globalButtonManager->handleInterrupt();
+  }
+}
+
+void enterCalibrationMode() {
+    Serial.println(">>> MODO DE CALIBRACAO ATIVADO <<<");
+    minhaPilhaDeSons.reset(); // Reseta a pilha de sons
+    Serial.println("Pilha de sons resetada.");
+    currentState = ProgramState::WAITING_FOR_WHITE_CAL;
+
+    // Feedback sonoro de entrada no modo
+    meuAltoFalante.playTone(1000, 100); delay(150);
+    meuAltoFalante.playTone(1500, 100); delay(150);
+    meuAltoFalante.playTone(2000, 100); delay(150);
+    
+    // Som para indicar "Pronto para o BRANCO"
+    Serial.println("Posicione no BRANCO e pressione 'Aumentar Volume'.");
+    meuAltoFalante.beep(2200, 300); // Som agudo
+}
+
+/**
+ * @brief Converte valores RGB (0-255) para um valor de Hue (0-359).
+ * Usa o algoritmo de conversão de RGB para HSV.
+ * @param r Valor vermelho (0-255).
+ * @param g Valor verde (0-255).
+ * @param b Valor azul (0-255).
+ * @return Valor de Hue (0-359).
+ */
 uint32_t rgbToHue(uint8_t r, uint8_t g, uint8_t b) {
     float r_norm = r / 255.0f;
     float g_norm = g / 255.0f;
@@ -114,7 +152,14 @@ uint32_t rgbToHue(uint8_t r, uint8_t g, uint8_t b) {
     return (uint32_t)hue;
 }
 
-// Função para mapear cor para frequência
+/**
+ * @brief Mapeia uma cor RGB para uma frequência de nota de piano.
+ * Considera a cor preta ou muito escura como sem nota (silêncio).
+ * @param r Valor vermelho (0-255).
+ * @param g Valor verde (0-255).
+ * @param b Valor azul (0-255).
+ * @return Frequência da nota correspondente (0 para silêncio).
+ */
 uint16_t mapColorToFrequency(uint8_t r, uint8_t g, uint8_t b) {
     // Considera preto ou muito escuro como sem nota, para evitar notas aleatórias com baixa leitura
     if (r < 20 && g < 20 && b < 20 && (r+g+b) < 50) { 
@@ -138,41 +183,53 @@ uint16_t mapColorToFrequency(uint8_t r, uint8_t g, uint8_t b) {
     return freq;
 }
 
-// Função para adicionar nota à pilha LIFO
-void addNoteToSoundStack(uint16_t newNote) {
-    if (newNote == 0) {
-        Serial.println("Tentativa de adicionar nota 0 (silêncio) a pilha. Ignorado.");
-        return;
-    }
-
-    for (int i = SOUND_STACK_SIZE - 1; i > 0; i--) {
-        soundStack[i] = soundStack[i - 1];
-    }
-    soundStack[0] = newNote;
-
-    if (soundStackCount < SOUND_STACK_SIZE) {
-        soundStackCount++;
-    }
-
-    Serial.print("Nota adicionada a pilha: "); Serial.println(newNote);
-    Serial.print("Pilha (Botao1[0] -> Botao8[7]): ");
-    for(int i=0; i < soundStackCount; i++){
-        Serial.print(soundStack[i]);
-        if (i < soundStackCount - 1) Serial.print(", ");
-    }
-    Serial.println();
-}
 
 // Função de callback para tratar ações dos botões// Em src/main.cpp
+/**
+ * @brief Trata a ação do botão pressionado.
+ * Dependendo do botão, toca um som, ajusta o volume ou captura a cor atual.
+ * @param action Ação do botão pressionado.
+ * @return void
+ */
 void handleButtonAction(ButtonAction action) {
     Serial.print("Acao do botao: ");
+    // --- LÓGICA DE CALIBRAÇÃO (usa botões de volume) ---
+    if (currentState == ProgramState::WAITING_FOR_WHITE_CAL) {
+        if (action == ButtonAction::VOLUME_UP) {
+            Serial.println("Capturando referencia de BRANCO com o botao 'Aumentar Volume'...");
+            int r, g, b;
+            meuSensor.getRawAverageRGB(r, g, b);
+            meuSensor.setWhiteBalance(r, g, b);
+            meuAltoFalante.playTone(1500, 100); delay(100); meuAltoFalante.playTone(2000, 150); // Som de sucesso
+            
+            Serial.println("Posicione no PRETO e pressione 'Diminuir Volume'.");
+            meuAltoFalante.beep(800, 300); // Som grave para preto
+            currentState = ProgramState::WAITING_FOR_BLACK_CAL;
+        }
+        return; // Ignora outras ações de botão enquanto estiver calibrando
+    }
+
+    if (currentState == ProgramState::WAITING_FOR_BLACK_CAL) {
+        if (action == ButtonAction::VOLUME_DOWN) {
+            Serial.println("Capturando referencia de PRETO com o botao 'Diminuir Volume'...");
+            int r, g, b;
+            meuSensor.getRawAverageRGB(r, g, b);
+            meuSensor.setBlackBalance(r, g, b);
+            meuAltoFalante.playTone(2000, 100); delay(100); meuAltoFalante.playTone(1500, 100); delay(100); meuAltoFalante.playTone(2000, 200);
+            
+            Serial.println("Calibracao concluida! Retornando ao modo normal.");
+            currentState = ProgramState::NORMAL_OPERATION;
+        }
+        return; // Ignora outras ações de botão enquanto estiver calibrando
+    }
     uint16_t freqToPlay = 0;
-    int8_t soundIndex = -1; // Padrão para nenhum índice de som
+    int soundIndex = -1; // Padrão para nenhum índice de som
 
     switch (action) {
+        // --- CASOS PARA OS BOTÕES DE SOM ---
         case ButtonAction::PLAY_SOUND_1:
             Serial.println("PLAY_SOUND_1");
-            soundIndex = 0;
+            soundIndex = 0; // Define o índice da pilha a ser tocado
             break;
         case ButtonAction::PLAY_SOUND_2:
             Serial.println("PLAY_SOUND_2");
@@ -203,82 +260,82 @@ void handleButtonAction(ButtonAction action) {
             soundIndex = 7;
             break;
 
-        case ButtonAction::VOLUME_UP: { // Usar chaves por boa prática
+        // --- CASOS PARA OS BOTÕES DE VOLUME ---
+        case ButtonAction::VOLUME_UP: {
             Serial.print("VOLUME_UP. Volume: ");
             if (volumeLevel < 10) volumeLevel++;
             Serial.println(volumeLevel);
             meuAltoFalante.beep(1500 + volumeLevel * 50, 50 + volumeLevel * 5);
             break;
         }
-        case ButtonAction::VOLUME_DOWN: { // Usar chaves por boa prática
+        case ButtonAction::VOLUME_DOWN: {
             Serial.print("VOLUME_DOWN. Volume: ");
             if (volumeLevel > 0) volumeLevel--;
             Serial.println(volumeLevel);
             meuAltoFalante.beep(1000 - volumeLevel * 50, 50 - volumeLevel * 3);
             break;
         }
-        case ButtonAction::CAPTURE_COLOR: { // *** CHAVES AQUI SÃO CRUCIAIS ***
+        
+        // --- CASO PARA O BOTÃO DE CAPTURA ---
+        case ButtonAction::CAPTURE_COLOR: {
             Serial.println("CAPTURE_COLOR");
-            // A cor atual (r_atual, g_atual, b_atual) já foi lida no loop principal
-            unsigned int mappedFreq = mapColorToFrequency(r_atual, g_atual, b_atual); // Inicialização agora dentro de um escopo seguro
-            addNoteToSoundStack(mappedFreq);
+            uint16_t mappedFreq = mapColorToFrequency(r_atual, g_atual, b_atual);
+            minhaPilhaDeSons.push(mappedFreq);
             meuAltoFalante.beep(mappedFreq > 0 ? mappedFreq : 2000, 100);
             break;
         }
-        case ButtonAction::NONE: { // Tratar explicitamente
-            Serial.println("Nenhuma acao especifica (NONE).");
-            break; 
-        }
-        default: { // Tratar explicitamente
+        
+        default:
             Serial.println("Acao desconhecida ou nao tratada.");
             break;
-        }
     }
 
-    // Se foi uma ação PLAY_SOUND_X, soundIndex terá sido definido para >= 0
+    // --- LÓGICA PARA TOCAR O SOM ---
+    // Este bloco só é executado se um dos botões PLAY_SOUND foi pressionado
     if (soundIndex != -1) {
-        if (soundIndex < soundStackCount && soundStack[soundIndex] > 0) {
-            freqToPlay = soundStack[soundIndex];
-            Serial.print("Tocando nota da posicao "); Serial.print(soundIndex);
-            Serial.print(" (Pilha[0] = mais nova): "); Serial.println(freqToPlay);
-            
-            unsigned long currentDuration = defaultSoundDuration;
-            // Exemplo de como o 'volumeLevel' poderia afetar a duração (ou outro parâmetro no futuro)
-            // Aumentar o volume poderia significar um som um pouco mais longo ou mais intenso.
-            // Diminuir poderia significar um som mais curto.
-            // Este é um ajuste simples, você pode torná-lo mais sofisticado.
-            if (volumeLevel > 5) {
-                currentDuration += (volumeLevel - 5) * 30; // Aumenta duração com volume
-            } else if (volumeLevel < 5) {
-                currentDuration -= (5 - volumeLevel) * 30; // Diminui duração com volume
-            }
-            if (currentDuration < 50) currentDuration = 50; // Duração mínima
-            if (currentDuration > 1000) currentDuration = 1000; // Duração máxima para não bloquear demais
+        if ((size_t)soundIndex < minhaPilhaDeSons.getCount()) {
+            freqToPlay = minhaPilhaDeSons.getNoteAt(soundIndex);
 
-            meuAltoFalante.playTone(freqToPlay, currentDuration);
+            if (freqToPlay > 0) { // Garante que a nota não seja silêncio
+                Serial.print("Tocando nota da posicao "); Serial.print(soundIndex);
+                Serial.print(": "); Serial.println(freqToPlay);
+                
+                // O "volume" afeta a duração do som
+                unsigned long currentDuration = defaultSoundDuration + (long(volumeLevel) - 5) * 20;
+                if (currentDuration < 50) currentDuration = 50;
+                if (currentDuration > 1000) currentDuration = 1000;
+
+                meuAltoFalante.playTone(freqToPlay, currentDuration);
+            } else {
+                 Serial.print("Posicao "); Serial.print(soundIndex); Serial.println(" da pilha esta vazia (nota 0).");
+                 meuAltoFalante.beep(100, 50);
+            }
         } else {
             Serial.print("Nenhuma nota valida na posicao "); Serial.print(soundIndex);
-            Serial.print(" da pilha (contagem: "); Serial.print(soundStackCount); Serial.println(")");
+            Serial.print(" da pilha (contagem: "); Serial.print(minhaPilhaDeSons.getCount()); Serial.println(")");
             meuAltoFalante.beep(100, 50); // Bip de erro/vazio
         }
     }
 }
-
+// =================================================================
+// --- SETUP ---
+// =================================================================
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(115200); // Lembre-se de configurar monitor_speed = 115200 no platformio.ini
     while (!Serial);
     Serial.println("Iniciando Color Piano...");
 
     meuSensor.begin(TCS3200Sensor::FrequencyScaling::SCALE_20_PERCENT);
     meuAltoFalante.begin();
     
-    Serial.println("Calibrando sensor de cor (siga as instrucoes)...");
-    meuSensor.calibrate(); 
-    Serial.println("Calibracao concluida.");
+    // Configura o ponteiro global para a ISR poder usá-lo
+    globalButtonManager = &meuGerenciadorDeBotoes;
 
+    // Registra a função de callback que tratará TODAS as ações de botão
     meuGerenciadorDeBotoes.onButtonPressed(handleButtonAction);
-
-    // Adiciona os botões (conecte-os com INPUT_PULLUP, então entre o pino e GND)
+    
+    // --- Adiciona TODOS os botões de POLLING ---
+    // (A sua versão estava faltando os botões de som 2 a 8)
     meuGerenciadorDeBotoes.addButton(PIN_BTN_SOUND_1, ButtonAction::PLAY_SOUND_1);
     meuGerenciadorDeBotoes.addButton(PIN_BTN_SOUND_2, ButtonAction::PLAY_SOUND_2);
     meuGerenciadorDeBotoes.addButton(PIN_BTN_SOUND_3, ButtonAction::PLAY_SOUND_3);
@@ -287,25 +344,48 @@ void setup() {
     meuGerenciadorDeBotoes.addButton(PIN_BTN_SOUND_6, ButtonAction::PLAY_SOUND_6);
     meuGerenciadorDeBotoes.addButton(PIN_BTN_SOUND_7, ButtonAction::PLAY_SOUND_7);
     meuGerenciadorDeBotoes.addButton(PIN_BTN_SOUND_8, ButtonAction::PLAY_SOUND_8);
-
     meuGerenciadorDeBotoes.addButton(PIN_BTN_VOL_UP, ButtonAction::VOLUME_UP);
     meuGerenciadorDeBotoes.addButton(PIN_BTN_VOL_DOWN, ButtonAction::VOLUME_DOWN);
     
-    meuGerenciadorDeBotoes.addButton(PIN_BTN_CAPTURE, ButtonAction::CAPTURE_COLOR);
-
-    Serial.println("Sistema pronto. Aponte o sensor para uma cor e pressione Capturar.");
-    Serial.println("Depois, pressione os botoes de som 1-8.");
-    meuAltoFalante.beep(1800, 200); // Bip de inicialização
+    // --- Adiciona e Ativa o Botão de INTERRUPÇÃO ---
+    meuGerenciadorDeBotoes.addInterruptButton(PIN_BTN_CAPTURE, ButtonAction::CAPTURE_COLOR);
+    attachInterrupt(digitalPinToInterrupt(PIN_BTN_CAPTURE), captureButtonISR, FALLING);
+    
+    Serial.println("Sistema pronto. Para calibrar, segure os dois botoes de volume por 1.5s.");
+    meuAltoFalante.beep(1800, 200);
 }
 
+// =================================================================
+// --- LOOP PRINCIPAL (com a nova lógica de detecção de combo) ---
+// =================================================================
 void loop() {
-    meuGerenciadorDeBotoes.update();
+    // 1. A lógica de atualização dos botões e leitura do sensor sempre rodam
+    meuGerenciadorDeBotoes.update(); 
     meuSensor.getCalibratedRGB(r_atual, g_atual, b_atual);
 
-    // Opcional: imprimir a cor lida continuamente para debug
-    // Serial.print("Cor Atual R:"); Serial.print(r_atual);
-    // Serial.print(" G:"); Serial.print(g_atual);
-    // Serial.print(" B:"); Serial.println(b_atual);
+    // 2. Lógica específica por estado
+    if (currentState == ProgramState::NORMAL_OPERATION) {
+        // Verifica se os dois botões de volume estão pressionados para entrar em modo de calibração
+        bool volUpPressed = (digitalRead(PIN_BTN_VOL_UP) == LOW);
+        bool volDownPressed = (digitalRead(PIN_BTN_VOL_DOWN) == LOW);
 
-    delay(20); // Pequeno delay para estabilidade e responsividade
+        if (volUpPressed && volDownPressed) {
+            if (!comboInProgress) {
+                // Inicia a contagem quando o combo é pressionado pela primeira vez
+                comboInProgress = true;
+                comboPressStartTime = millis();
+            } else if (millis() - comboPressStartTime > COMBO_HOLD_DURATION) {
+                // Se segurou por tempo suficiente, ativa o modo de calibração
+                enterCalibrationMode(); 
+                comboInProgress = false; // Reseta para não reativar
+            }
+        } else {
+            // Se um dos botões for solto, o combo é interrompido
+            comboInProgress = false;
+        }
+    }
+    // Se estiver em modo de calibração, o loop não faz nada extra, apenas
+    // espera a lógica que está dentro do handleButtonAction ser acionada.
+    
+    delay(20);
 }
