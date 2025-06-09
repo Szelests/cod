@@ -3,11 +3,9 @@
 ButtonManager::ButtonManager()
     : _buttonCount(0), _debounceDelay(50), _actionCallback(nullptr),
       _interruptFlag(false), _interruptAction(ButtonAction::NONE), _lastInterruptTime(0) {
-    // Construtor agora inicializa as novas variáveis
 }
 
 bool ButtonManager::addButton(uint8_t pin, ButtonAction action, bool activeLow) {
-    // ... (este método para botões de polling continua igual) ...
     if (_buttonCount >= MAX_BUTTONS) return false;
     _buttons[_buttonCount].pin = pin;
     _buttons[_buttonCount].action = action;
@@ -21,7 +19,6 @@ bool ButtonManager::addButton(uint8_t pin, ButtonAction action, bool activeLow) 
     return true;
 }
 
-// NOVO método de implementação
 void ButtonManager::addInterruptButton(uint8_t pin, ButtonAction action) {
     _interruptAction = action;
     pinMode(pin, INPUT_PULLUP); // Configura o pino da interrupção
@@ -31,7 +28,6 @@ void ButtonManager::onButtonPressed(ButtonActionCallback callback) {
     _actionCallback = callback;
 }
 
-// NOVO método de implementação
 void ButtonManager::handleInterrupt() {
     // Debounce simples para a interrupção para evitar ruídos
     unsigned long currentTime = millis();
@@ -41,7 +37,6 @@ void ButtonManager::handleInterrupt() {
     }
 }
 
-// MÉTODO UPDATE MODIFICADO
 void ButtonManager::update() {
     // 1. Verifica a flag da interrupção PRIMEIRO
     if (_interruptFlag) {
