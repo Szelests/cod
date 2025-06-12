@@ -4,14 +4,18 @@
 #include "PWMSpeaker.hpp"
 #include "ButtonManager.hpp"
 #include "SoundStack.hpp"
+#include "LedManager.hpp"
 
 // --- DEFINIÇÕES DE PINOS ---
-#define PIN_S0 4
-#define PIN_S1 5
-#define PIN_S2 6
-#define PIN_S3 7
-#define PIN_OUT_SENSOR 8
-#define PIN_SPEAKER 9
+//DEFINIÇÃO SENSOR DE CORES
+#define PIN_S0 4 // AZUL ESCURO
+#define PIN_S1 5 // LARANJA
+#define PIN_S2 6 // BRANCO
+#define PIN_S3 7 //VERDE CLARO
+#define PIN_OUT_SENSOR 8 // VERDE ESCURO
+
+// BOTÕES
+#define PIN_SPEAKER 9 
 #define PIN_BTN_SOUND_1 10
 #define PIN_BTN_SOUND_2 11
 #define PIN_BTN_SOUND_3 12
@@ -42,7 +46,7 @@ unsigned long lastCaptureTime = 0;
 
 int r_atual, g_atual, b_atual;
 uint8_t volumeLevel = 5; // 0-10
-unsigned long defaultSoundDuration = 800; // Duração do som em ms
+unsigned long defaultSoundDuration = 300; // Duração do som em ms
 
 const uint16_t pianoNotes[] = { 220, 233, 247, 262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494, 523, 554, 587, 622, 659, 698, 740, 784, 831, 880, 932, 988 };
 const uint8_t numPianoNotes = sizeof(pianoNotes) / sizeof(pianoNotes[0]);

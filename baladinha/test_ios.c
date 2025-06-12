@@ -22,12 +22,12 @@
 #define PIN_BTN_SOUND_2 11
 #define PIN_BTN_SOUND_3 12
 #define PIN_BTN_SOUND_4 13
-#define PIN_BTN_SOUND_5 A5
-#define PIN_BTN_SOUND_6 A4
+#define PIN_BTN_SOUND_5 A0
+#define PIN_BTN_SOUND_6 A1
 #define PIN_BTN_SOUND_7 A3
 #define PIN_BTN_SOUND_8 A2
-#define PIN_BTN_VOL_UP A1
-#define PIN_BTN_VOL_DOWN A0
+#define PIN_BTN_VOL_UP A4
+#define PIN_BTN_VOL_DOWN A5
 #define PIN_BTN_CAPTURE 2
 
 // Array com todos os pinos de botão para facilitar a configuração
