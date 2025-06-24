@@ -32,19 +32,23 @@
 #define PIN_LED_G 10
 #define PIN_LED_B 11
 // Endereço I2C do Expansor
-#define I2C_ADDR_LEDS 0x20
-#define I2C_ADDR_LCD 0x27 // Endereço I2C do LCD pode ser 0x27 ou 0x3F dependendo do modelo
+#define I2C_ADDR_LEDS 0x27
+#define I2C_ADDR_LCD 0x23 // Endereço I2C do LCD pode ser 0x27 ou 0x3F dependendo do modelo
 
 // Pinos NO EXPANSOR para controlar os anodos dos 4 LEDs
-const uint8_t EXPANDER_ANODE_PINS[] = { P0, P1, P2, P3 };
+const uint8_t EXPANDER_CATODE_PINS[] = { P4, P5, P6, P7 };
 
 // --- INSTÂNCIAS DAS CLASSES E VARIÁVEIS GLOBAIS ---
+
+// -- classes auxiliares --
 LiquidCrystal_I2C lcd(I2C_ADDR_LCD, 16, 2);
 PCF8574 expansorLEDS(I2C_ADDR_LEDS);
+
+// -- classes principais --
 TCS3200Sensor meuSensor(PIN_S0, PIN_S1, PIN_S2, PIN_S3, PIN_OUT_SENSOR);
 PWMSpeaker meuAltoFalante(PIN_SPEAKER);
 SoundStack minhaPilhaDeSons; 
-LedManager meuGerenciadorDeLeds(PIN_LED_R, PIN_LED_G, PIN_LED_B, expansorLEDS, EXPANDER_ANODE_PINS, 4);
+LedManager meuGerenciadorDeLeds(PIN_LED_R, PIN_LED_G, PIN_LED_B, expansorLEDS, EXPANDER_CATODE_PINS, 4);
 ButtonManager meuGerenciadorDeBotoes;
 
 ButtonManager* globalButtonManager = nullptr;
