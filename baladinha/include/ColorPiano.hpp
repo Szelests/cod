@@ -7,12 +7,14 @@
 #include "SoundStack.hpp"
 #include "LedManager.hpp"
 #include "DisplayManager.hpp"
+#include "MiniGame.hpp"
 
 class ColorPiano {
 public:
     ColorPiano();
     void setup();
     void loop();
+
     static void isr_wrapper();
     static void button_action_wrapper(ButtonAction action);
 
@@ -24,9 +26,12 @@ private:
     SoundStack _soundStack;
     LedManager _ledManager;
     ButtonManager _buttonManager;
+    MiniGame _miniGame;
 
-    enum class Mode { REALTIME_DISPLAY, PLAYBACK, CALIBRATION };
+    // CORREÇÃO: Adicionando o estado MINIGAME
+    enum class Mode { REALTIME_DISPLAY, PLAYBACK, CALIBRATION, MINIGAME };
     Mode _currentMode;
+
     enum class CalibState { IDLE, WAIT_WHITE, WAIT_BLACK };
     CalibState _calibState;
     
@@ -35,17 +40,19 @@ private:
     unsigned long _freezeLedsUntil;
     unsigned long _comboPressStartTime;
     unsigned long _lastInteractionTime;
+    unsigned long _defaultSoundDuration; // CORREÇÃO: Declarado como membro
     bool _comboInProgress;
     
     static ColorPiano* _instance;
     
     void _handleButtonAction(ButtonAction action);
     void _runRealtimeMode();
+    void _runMinigameUpdate();
     void _enterCalibrationMode();
     void _handleInterrupt();
+
     const char* _rgbToColorName(uint8_t r, uint8_t g, uint8_t b);
     uint16_t _mapColorToFrequency(int r, int g, int b);
-    uint16_t _rgbToHue(int r, int g, int b); // <<< ADICIONE ESTA LINHA FALTANTE
-
+    uint16_t _rgbToHue(int r, int g, int b);
 };
 #endif

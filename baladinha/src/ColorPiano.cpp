@@ -22,12 +22,11 @@
 const uint8_t EXPANDER_ANODE_PINS[] = { P0, P1, P2, P3 };
 const unsigned long COMBO_HOLD_DURATION = 2000;
 const unsigned long TIMEOUT_PLAYBACK_MODE = 5000;
+const unsigned long FREEZE_DURATION = 1000;
 const uint16_t pianoNotes[] = { 220, 233, 247, 262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494, 523, 554, 587, 622, 659, 698, 740, 784, 831, 880, 932, 988 };
 const uint8_t numPianoNotes = sizeof(pianoNotes) / sizeof(pianoNotes[0]);
 
 ColorPiano* ColorPiano::_instance = nullptr;
-
-// --- IMPLEMENTAÇÃO DA CLASSE COLORPIANO ---
 
 ColorPiano::ColorPiano() : 
     _ledExpander(I2C_ADDR_LEDS),
@@ -35,10 +34,10 @@ ColorPiano::ColorPiano() :
     _sensor(PIN_S0, PIN_S1, PIN_S2, PIN_S3, PIN_OUT_SENSOR),
     _speaker(PIN_SPEAKER),
     _ledManager(PIN_LED_R, PIN_LED_G, PIN_LED_B, _ledExpander),
-    _buttonManager()
+    _buttonManager(),
+    _miniGame(_ledManager, _display, _speaker, _soundStack)
 {
     _instance = this;
-    // Inicialização das variáveis de estado
     _currentMode = Mode::REALTIME_DISPLAY;
     _calibState = CalibState::IDLE;
     _volume = 5;
@@ -46,12 +45,7 @@ ColorPiano::ColorPiano() :
     _comboPressStartTime = 0;
     _lastInteractionTime = 0;
     _comboInProgress = false;
-}
-
-void ColorPiano::button_action_wrapper(ButtonAction action) {
-    if (_instance) {
-        _instance->_handleButtonAction(action);
-    }
+    _defaultSoundDuration = 800; // CORREÇÃO: Inicializado aqui
 }
 
 void ColorPiano::setup() {
@@ -64,12 +58,9 @@ void ColorPiano::setup() {
     _sensor.begin(TCS3200Sensor::FrequencyScaling::SCALE_20_PERCENT);
     _speaker.begin();
     _ledManager.begin(EXPANDER_ANODE_PINS, 4);
+    randomSeed(analogRead(A7));
     
-    // --- CORREÇÃO CRÍTICA AQUI ---
-    // Em vez da lambda, agora registramos nossa função wrapper estática.
     _buttonManager.onButtonPressed(button_action_wrapper);
-
-    // O registro dos botões continua o mesmo
     _buttonManager.addButton(PIN_BTN_SOUND_1, ButtonAction::PLAY_SOUND_1);
     _buttonManager.addButton(PIN_BTN_SOUND_2, ButtonAction::PLAY_SOUND_2);
     _buttonManager.addButton(PIN_BTN_SOUND_3, ButtonAction::PLAY_SOUND_3);
@@ -77,7 +68,6 @@ void ColorPiano::setup() {
     _buttonManager.addButton(PIN_BTN_VOL_UP, ButtonAction::VOLUME_UP);
     _buttonManager.addButton(PIN_BTN_VOL_DOWN, ButtonAction::VOLUME_DOWN);
     
-    // A configuração da interrupção também usa um wrapper (que deve estar no main.cpp)
     pinMode(PIN_BTN_CAPTURE, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(PIN_BTN_CAPTURE), isr_wrapper, FALLING);
     
@@ -95,44 +85,117 @@ void ColorPiano::loop() {
         if (!_comboInProgress) {
             _comboInProgress = true; _comboPressStartTime = millis();
         } else if (millis() - _comboPressStartTime > COMBO_HOLD_DURATION) {
-            _enterCalibrationMode(); 
-            _comboInProgress = false;
+            _enterCalibrationMode(); _comboInProgress = false;
         }
     } else {
         _comboInProgress = false;
     }
     
-    if (_currentMode == Mode::REALTIME_DISPLAY) {
-        _runRealtimeMode();
-    } 
-    else if (_currentMode == Mode::PLAYBACK) {
-        if (millis() - _lastInteractionTime > TIMEOUT_PLAYBACK_MODE) {
-            _currentMode = Mode::REALTIME_DISPLAY;
-            _display.showRealtimeMode();
-        }
+    switch(_currentMode) {
+        case Mode::REALTIME_DISPLAY:
+            _runRealtimeMode();
+            break;
+        case Mode::PLAYBACK:
+            if (millis() - _lastInteractionTime > TIMEOUT_PLAYBACK_MODE) {
+                _currentMode = Mode::REALTIME_DISPLAY;
+                _display.showRealtimeMode();
+            }
+            break;
+        case Mode::MINIGAME:
+            _miniGame.update();
+            if (!_miniGame.isRunning()) {
+                _currentMode = Mode::REALTIME_DISPLAY;
+                _display.showRealtimeMode();
+            }
+            break;
+        case Mode::CALIBRATION:
+            break;
     }
-    
     delay(20);
 }
 
-void ColorPiano::isr_wrapper() {
-    if (_instance) _instance->_handleInterrupt();
-}
+void ColorPiano::isr_wrapper() { if (_instance) _instance->_handleInterrupt(); }
+void ColorPiano::button_action_wrapper(ButtonAction action) { if (_instance) _instance->_handleButtonAction(action); }
 
 void ColorPiano::_handleInterrupt() {
     _handleButtonAction(ButtonAction::CAPTURE_COLOR);
 }
 
 void ColorPiano::_handleButtonAction(ButtonAction action) {
-    if (action != ButtonAction::CAPTURE_COLOR && (millis() - _lastInteractionTime < 250)) return; // Debounce extra
+    if (millis() - _lastInteractionTime < 250 && action != ButtonAction::CAPTURE_COLOR) return;
     _lastInteractionTime = millis();
 
+    if (_currentMode == Mode::MINIGAME) {
+        _miniGame.handleButtonPress(action);
+        return;
+    }
     if (_currentMode == Mode::CALIBRATION) {
-        // ... Lógica de calibração que você já tem ...
+        if (_calibState == CalibState::WAIT_WHITE && action == ButtonAction::VOLUME_UP) {
+            _sensor.getRawAverageRGB(_r, _g, _b); _sensor.setWhiteBalance(_r, _g, _b);
+            _speaker.playTone(1500, 150);
+            _display.showCalibratingWhite();
+            _calibState = CalibState::WAIT_BLACK;
+        } else if (_calibState == CalibState::WAIT_BLACK && action == ButtonAction::VOLUME_DOWN) {
+            _sensor.getRawAverageRGB(_r, _g, _b); _sensor.setBlackBalance(_r, _g, _b);
+            _speaker.playTone(2000, 200);
+            _display.showCalibrationDone();
+            delay(1500);
+            
+            // A chamada que agora funcionará
+            _display.showTutorial(); 
+            
+            _display.showRealtimeMode();
+            _calibState = CalibState::IDLE;
+            _currentMode = Mode::REALTIME_DISPLAY;
+        }
         return;
     }
 
-    // ... Lógica de operação normal que você já tem ...
+    int soundIndex = -1;
+    switch (action) {
+        case ButtonAction::PLAY_SOUND_1: soundIndex = 0; break;
+        case ButtonAction::PLAY_SOUND_2: soundIndex = 1; break;
+        case ButtonAction::PLAY_SOUND_3: soundIndex = 2; break;
+        case ButtonAction::PLAY_SOUND_4: soundIndex = 3; break;
+        case ButtonAction::VOLUME_UP: if (_volume < 10) _volume++; _display.showVolume(_volume); return;
+        case ButtonAction::VOLUME_DOWN: if (_volume > 0) _volume--; _display.showVolume(_volume); return;
+        case ButtonAction::CAPTURE_COLOR: {
+            _currentMode = Mode::REALTIME_DISPLAY;
+            _freezeLedsUntil = millis() + FREEZE_DURATION;
+            
+            SoundData capturedData; // CORREÇÃO: Inicialização explícita
+            capturedData.r = _r; capturedData.g = _g; capturedData.b = _b;
+            capturedData.frequency = _mapColorToFrequency(_r, _g, _b);
+            _soundStack.push(capturedData);
+
+            const char* colorName = _rgbToColorName(capturedData.r, capturedData.g, capturedData.b);
+            _display.showCaptured(colorName);
+            _ledManager.displayColorOnAll(capturedData.r, capturedData.g, capturedData.b, FREEZE_DURATION);
+            _speaker.beep(capturedData.frequency > 0 ? capturedData.frequency : 2000, 200);
+
+            if (_soundStack.getCount() >= 4) {
+                _currentMode = Mode::MINIGAME;
+                _miniGame.start();
+            }
+            return;
+        }
+        default: return;
+    }
+
+    if (soundIndex != -1) {
+        _currentMode = Mode::PLAYBACK;
+        SoundData dataToPlay = _soundStack.getSoundDataAt(soundIndex);
+        if (dataToPlay.frequency > 0) {
+            // CORREÇÃO: Usa a variável membro _defaultSoundDuration
+            unsigned long currentDuration = _defaultSoundDuration + (long(_volume) - 5) * 40;
+            const char* colorName = _rgbToColorName(dataToPlay.r, dataToPlay.g, dataToPlay.b);
+            _speaker.playTone(dataToPlay.frequency, currentDuration);
+            _ledManager.displayColorOnOne(soundIndex, dataToPlay.r, dataToPlay.g, dataToPlay.b, currentDuration);
+            _display.showPlayback(dataToPlay, colorName);
+        } else {
+            _speaker.beep(100, 50); _display.showEmptySlot();
+        }
+    }
 }
 
 void ColorPiano::_runRealtimeMode() {
@@ -151,6 +214,8 @@ void ColorPiano::_enterCalibrationMode() {
     _speaker.playTone(1200, 50);
 }
 
+// --- IMPLEMENTAÇÃO DAS FUNÇÕES AUXILIARES PRIVADAS ---
+
 const char* ColorPiano::_rgbToColorName(uint8_t r, uint8_t g, uint8_t b) {
     if (r > 180 && g > 180 && b > 180) return "Branco";
     if (r > 180 && g > 180 && b < 100) return "Amarelo";
@@ -163,11 +228,16 @@ const char* ColorPiano::_rgbToColorName(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 uint16_t ColorPiano::_mapColorToFrequency(int r, int g, int b) {
-    if (r < 20 && g < 20 && b < 20 && (r + g + b) < 50) return 0;
+    if (r < 20 && g < 20 && b < 20 && (r + g + b) < 50) {
+        Serial.println("Cor muito escura, sem nota.");
+        return 0; 
+    }
     uint16_t hue = _rgbToHue(r, g, b); 
     uint8_t noteIndex = map(hue, 0, 359, 0, numPianoNotes - 1);
-    noteIndex = constrain(noteIndex, 0, numPianoNotes - 1);
-    return pianoNotes[noteIndex];
+    uint16_t freq = pianoNotes[noteIndex];
+    Serial.print("Cor(R,G,B):"); Serial.print(r); Serial.print(","); Serial.print(g); Serial.print(","); Serial.print(b);
+    Serial.print(" -> Freq:"); Serial.println(freq);
+    return freq;
 }
 
 uint16_t ColorPiano::_rgbToHue(int r, int g, int b) {
