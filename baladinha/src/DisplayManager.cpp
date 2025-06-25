@@ -1,7 +1,7 @@
 #include "DisplayManager.hpp"
 
 DisplayManager::DisplayManager(uint8_t address, uint8_t cols, uint8_t rows)
-    : _lcd(address, cols, rows) {}
+    : _lcd(address, cols, rows)  {}
 
 void DisplayManager::begin() {
     _lcd.init();
@@ -10,13 +10,15 @@ void DisplayManager::begin() {
 
 void DisplayManager::showWelcome() {
     _lcd.clear();
-    _lcd.setCursor(0, 0); _lcd.print("Color Piano");
+    _lcd.setCursor(0, 0); _lcd.print("==DISCO MULTISSENSORIAL==");
     _lcd.setCursor(0, 1); _lcd.print("Iniciando...");
 }
 
 void DisplayManager::showReadyToCalibrate() {
     _lcd.clear();
-    _lcd.print("Segure Vol p/ cal");
+    _lcd.print("Segure + e -");
+    _lcd.setCursor(0, 1);
+    _lcd.print("p/ calibrar");
 }
 
 void DisplayManager::showCalibrationMode() {

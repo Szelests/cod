@@ -6,11 +6,15 @@
 
 class DisplayManager {
 public:
+    // CONSTRUTOR SIMPLIFICADO
     DisplayManager(uint8_t address, uint8_t cols, uint8_t rows);
+
     void begin();
+    
+    // Todos os outros métodos show... continuam os mesmos
     void showWelcome();
     void showReadyToCalibrate();
-    void showCalibrationMode(); // <-- Estava faltando
+    void showCalibrationMode();
     void showCalibratingWhite();
     void showCalibratingBlack();
     void showCalibrationDone();
@@ -21,7 +25,7 @@ public:
     void showVolume(uint8_t level);
 
 private:
-    LiquidCrystal_I2C _lcd; // <-- Estava faltando
+    LiquidCrystal_I2C _lcd;
 };
 
 #endif
