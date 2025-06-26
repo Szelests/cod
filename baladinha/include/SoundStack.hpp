@@ -1,11 +1,14 @@
 #ifndef SOUND_STACK_HPP
 #define SOUND_STACK_HPP
+
 #include <stddef.h>
 #include <stdint.h>
 
 struct SoundData {
     uint16_t frequency = 0;
-    uint8_t r = 0, g = 0, b = 0;
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
 };
 
 class SoundStack {

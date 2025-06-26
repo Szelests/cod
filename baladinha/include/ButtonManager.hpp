@@ -1,6 +1,5 @@
 #ifndef BUTTON_MANAGER_HPP
 #define BUTTON_MANAGER_HPP
-
 #include <Arduino.h>
 
 const uint8_t MAX_BUTTONS = 10;

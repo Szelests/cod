@@ -24,7 +24,8 @@ const unsigned long COMBO_HOLD_DURATION = 2000;
 const unsigned long TIMEOUT_PLAYBACK_MODE = 5000;
 const unsigned long FREEZE_DURATION = 1000;
 const uint16_t pianoNotes[] = { 220, 233, 247, 262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494, 523, 554, 587, 622, 659, 698, 740, 784, 831, 880, 932, 988 };
-const uint8_t numPianoNotes = sizeof(pianoNotes) / sizeof(pianoNotes[0]);
+const char* colorNames[] = { "Laranja", "Laranja Amarelado", "Amarelo", "Verde Chartreuse", "Verde Claro", "Verde Primavera", "Ciano Esverdeado", "Ciano", "Azul Celeste", "Azul Claro", "Azul", "Violeta", "Magenta", "Rosa choque", "Rosa", "Rosa Avermelhado", "Vermelho", "Vermelho Alaranjado", "Laranja Queimado", "Laranja Escuro", "Ocre", "Limao", "Verde Oliva", "Verde Musgo", "Turquesa", "Azul Marinho", "Roxo" };
+const uint8_t numPaletteEntries = sizeof(pianoNotes) / sizeof(pianoNotes[0]);
 
 ColorPiano* ColorPiano::_instance = nullptr;
 
@@ -41,11 +42,12 @@ ColorPiano::ColorPiano() :
     _currentMode = Mode::REALTIME_DISPLAY;
     _calibState = CalibState::IDLE;
     _volume = 5;
+    _defaultSoundDuration = 800;
     _freezeLedsUntil = 0;
     _comboPressStartTime = 0;
     _lastInteractionTime = 0;
     _comboInProgress = false;
-    _defaultSoundDuration = 800; // CORREÇÃO: Inicializado aqui
+    _captureRequested = false;
 }
 
 void ColorPiano::setup() {
@@ -76,6 +78,7 @@ void ColorPiano::setup() {
 }
 
 void ColorPiano::loop() {
+    _handleCaptureRequest();
     _buttonManager.update(); 
     _ledManager.update();
 
@@ -102,11 +105,7 @@ void ColorPiano::loop() {
             }
             break;
         case Mode::MINIGAME:
-            _miniGame.update();
-            if (!_miniGame.isRunning()) {
-                _currentMode = Mode::REALTIME_DISPLAY;
-                _display.showRealtimeMode();
-            }
+            _runMinigameUpdate();
             break;
         case Mode::CALIBRATION:
             break;
@@ -118,7 +117,16 @@ void ColorPiano::isr_wrapper() { if (_instance) _instance->_handleInterrupt(); }
 void ColorPiano::button_action_wrapper(ButtonAction action) { if (_instance) _instance->_handleButtonAction(action); }
 
 void ColorPiano::_handleInterrupt() {
-    _handleButtonAction(ButtonAction::CAPTURE_COLOR);
+    if (millis() - _lastInteractionTime > 1000) {
+        _captureRequested = true;
+    }
+}
+
+void ColorPiano::_handleCaptureRequest() {
+    if (_captureRequested) {
+        _captureRequested = false;
+        _handleButtonAction(ButtonAction::CAPTURE_COLOR);
+    }
 }
 
 void ColorPiano::_handleButtonAction(ButtonAction action) {
@@ -140,10 +148,7 @@ void ColorPiano::_handleButtonAction(ButtonAction action) {
             _speaker.playTone(2000, 200);
             _display.showCalibrationDone();
             delay(1500);
-            
-            // A chamada que agora funcionará
-            _display.showTutorial(); 
-            
+            _display.showTutorial();
             _display.showRealtimeMode();
             _calibState = CalibState::IDLE;
             _currentMode = Mode::REALTIME_DISPLAY;
@@ -151,50 +156,52 @@ void ColorPiano::_handleButtonAction(ButtonAction action) {
         return;
     }
 
-    int soundIndex = -1;
     switch (action) {
-        case ButtonAction::PLAY_SOUND_1: soundIndex = 0; break;
-        case ButtonAction::PLAY_SOUND_2: soundIndex = 1; break;
-        case ButtonAction::PLAY_SOUND_3: soundIndex = 2; break;
-        case ButtonAction::PLAY_SOUND_4: soundIndex = 3; break;
-        case ButtonAction::VOLUME_UP: if (_volume < 10) _volume++; _display.showVolume(_volume); return;
-        case ButtonAction::VOLUME_DOWN: if (_volume > 0) _volume--; _display.showVolume(_volume); return;
+        case ButtonAction::PLAY_SOUND_1:
+        case ButtonAction::PLAY_SOUND_2:
+        case ButtonAction::PLAY_SOUND_3:
+        case ButtonAction::PLAY_SOUND_4: {
+            _currentMode = Mode::PLAYBACK;
+            int soundIndex = (int)action - (int)ButtonAction::PLAY_SOUND_1;
+            SoundData dataToPlay = _soundStack.getSoundDataAt(soundIndex);
+            if (dataToPlay.frequency > 0) {
+                unsigned long currentDuration = _defaultSoundDuration + (long(_volume) - 5) * 40;
+                const char* colorName = "N/A";
+                for(int i = 0; i < numPaletteEntries; i++) {
+                    if(pianoNotes[i] == dataToPlay.frequency) { colorName = colorNames[i]; break; }
+                }
+                _speaker.playTone(dataToPlay.frequency, currentDuration);
+                _ledManager.displayColorOnOne(soundIndex, dataToPlay.r, dataToPlay.g, dataToPlay.b, currentDuration);
+                _display.showPlayback(dataToPlay, colorName);
+            } else {
+                _speaker.beep(100, 50); _display.showEmptySlot();
+            }
+            break;
+        }
         case ButtonAction::CAPTURE_COLOR: {
             _currentMode = Mode::REALTIME_DISPLAY;
             _freezeLedsUntil = millis() + FREEZE_DURATION;
-            
-            SoundData capturedData; // CORREÇÃO: Inicialização explícita
+            int paletteIndex = _mapColorToPaletteIndex(_r, _g, _b);
+            SoundData capturedData;
             capturedData.r = _r; capturedData.g = _g; capturedData.b = _b;
-            capturedData.frequency = _mapColorToFrequency(_r, _g, _b);
+            const char* capturedColorName = "Escuro";
+            if (paletteIndex != -1) {
+                capturedData.frequency = pianoNotes[paletteIndex];
+                capturedColorName = colorNames[paletteIndex];
+            }
             _soundStack.push(capturedData);
-
-            const char* colorName = _rgbToColorName(capturedData.r, capturedData.g, capturedData.b);
-            _display.showCaptured(colorName);
+            _display.showCaptured(capturedColorName);
             _ledManager.displayColorOnAll(capturedData.r, capturedData.g, capturedData.b, FREEZE_DURATION);
             _speaker.beep(capturedData.frequency > 0 ? capturedData.frequency : 2000, 200);
-
             if (_soundStack.getCount() >= 4) {
                 _currentMode = Mode::MINIGAME;
                 _miniGame.start();
             }
-            return;
+            break;
         }
-        default: return;
-    }
-
-    if (soundIndex != -1) {
-        _currentMode = Mode::PLAYBACK;
-        SoundData dataToPlay = _soundStack.getSoundDataAt(soundIndex);
-        if (dataToPlay.frequency > 0) {
-            // CORREÇÃO: Usa a variável membro _defaultSoundDuration
-            unsigned long currentDuration = _defaultSoundDuration + (long(_volume) - 5) * 40;
-            const char* colorName = _rgbToColorName(dataToPlay.r, dataToPlay.g, dataToPlay.b);
-            _speaker.playTone(dataToPlay.frequency, currentDuration);
-            _ledManager.displayColorOnOne(soundIndex, dataToPlay.r, dataToPlay.g, dataToPlay.b, currentDuration);
-            _display.showPlayback(dataToPlay, colorName);
-        } else {
-            _speaker.beep(100, 50); _display.showEmptySlot();
-        }
+        case ButtonAction::VOLUME_UP: if (_volume < 10) _volume++; _display.showVolume(_volume); break;
+        case ButtonAction::VOLUME_DOWN: if (_volume > 0) _volume--; _display.showVolume(_volume); break;
+        default: break;
     }
 }
 
@@ -214,42 +221,28 @@ void ColorPiano::_enterCalibrationMode() {
     _speaker.playTone(1200, 50);
 }
 
-// --- IMPLEMENTAÇÃO DAS FUNÇÕES AUXILIARES PRIVADAS ---
-
-const char* ColorPiano::_rgbToColorName(uint8_t r, uint8_t g, uint8_t b) {
-    if (r > 180 && g > 180 && b > 180) return "Branco";
-    if (r > 180 && g > 180 && b < 100) return "Amarelo";
-    if (r > 180 && b > 180 && g < 100) return "Magenta";
-    if (g > 180 && b > 180 && r < 100) return "Ciano";
-    if (r > 180 && g < 100 && b < 100) return "Vermelho";
-    if (g > 180 && r < 100 && b < 100) return "Verde";
-    if (b > 180 && r < 100 && g < 100) return "Azul";
-    return "Misto";
-}
-
-uint16_t ColorPiano::_mapColorToFrequency(int r, int g, int b) {
-    if (r < 20 && g < 20 && b < 20 && (r + g + b) < 50) {
-        Serial.println("Cor muito escura, sem nota.");
-        return 0; 
+void ColorPiano::_runMinigameUpdate() {
+    _miniGame.update();
+    if (!_miniGame.isRunning()) {
+        _currentMode = Mode::REALTIME_DISPLAY;
+        _display.showRealtimeMode();
     }
-    uint16_t hue = _rgbToHue(r, g, b); 
-    uint8_t noteIndex = map(hue, 0, 359, 0, numPianoNotes - 1);
-    uint16_t freq = pianoNotes[noteIndex];
-    Serial.print("Cor(R,G,B):"); Serial.print(r); Serial.print(","); Serial.print(g); Serial.print(","); Serial.print(b);
-    Serial.print(" -> Freq:"); Serial.println(freq);
-    return freq;
 }
 
 uint16_t ColorPiano::_rgbToHue(int r, int g, int b) {
-    float r_norm = r / 255.0f; float g_norm = g / 255.0f; float b_norm = b / 255.0f;
-    float cmax = max(max(r_norm, g_norm), b_norm); float cmin = min(min(r_norm, g_norm), b_norm);
-    float delta = cmax - cmin; float hue = 0;
-    if (delta < 0.0001f) { hue = 0; }
-    else {
-        if (cmax == r_norm) { hue = 60 * fmod(((g_norm - b_norm) / delta), 6.0f); }
-        else if (cmax == g_norm) { hue = 60 * (((b_norm - r_norm) / delta) + 2.0f); }
-        else { hue = 60 * (((r_norm - g_norm) / delta) + 4.0f); }
-    }
-    if (hue < 0) { hue += 360.0f; }
+    float r_norm=r/255.0f, g_norm=g/255.0f, b_norm=b/255.0f;
+    float cmax=max(max(r_norm,g_norm),b_norm), cmin=min(min(r_norm,g_norm),b_norm);
+    float delta=cmax-cmin, hue=0;
+    if(delta<0.0001f){hue=0;}
+    else{if(cmax==r_norm){hue=60*fmod(((g_norm-b_norm)/delta),6.0f);}
+    else if(cmax==g_norm){hue=60*(((b_norm-r_norm)/delta)+2.0f);}
+    else{hue=60*(((r_norm-g_norm)/delta)+4.0f);}}
+    if(hue<0){hue+=360.0f;}
     return (uint16_t)hue;
+}
+
+int ColorPiano::_mapColorToPaletteIndex(int r, int g, int b) {
+    if (r < 20 && g < 20 && b < 20 && (r + g + b) < 50) return -1;
+    uint16_t hue = _rgbToHue(r, g, b);
+    return map(hue, 0, 359, 0, numPaletteEntries - 1);
 }
